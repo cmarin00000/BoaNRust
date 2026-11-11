@@ -24,6 +24,7 @@
 /* $Id: alias.c,v 1.70.2.4 2002/07/28 02:46:52 jnelson Exp $ */
 
 #include "boa.h"
+#include "boa_pathguard.h"
 
 static alias *alias_hashtable[ALIAS_HASHTABLE_SIZE];
 
@@ -203,6 +204,7 @@ int translate_uri(request * req)
     alias *current;
     char *p;
     int uri_len;
+    int from_document_root = 0;
 
     req_urip = req->request_uri;
     if (req_urip[0] != '/') {
@@ -299,6 +301,7 @@ int translate_uri(request * req)
     } else if (document_root) {
         /* no aliasing, no userdir... */
         int l1, l2, l3;
+	from_document_root = 1;
 
         l1 = strlen(document_root);
         l2 = strlen(req->request_uri);
@@ -340,6 +343,49 @@ int translate_uri(request * req)
         send_r_error(req);
         return 0;
     }
+
+
+    if (from_document_root) {
+
+       char safe_path[MAX_HEADER_LENGTH + 1];
+       char *safe_pathname;
+       int path_rc;
+
+    /* Validar mediante Rust */
+    path_rc = boa_validate_path(
+        document_root,
+        req->pathname,
+        safe_path,
+        sizeof(safe_path)
+    );
+
+    /* Rechazar rutas no autorizadas */
+    if (path_rc != 0) {
+
+        free(req->pathname);
+        req->pathname = NULL;
+
+        send_r_not_found(req);
+        return 0;
+    }
+
+    /* Reemplazar la ruta C por la ruta validada */
+    safe_pathname = strdup(safe_path);
+
+    if (!safe_pathname) {
+
+        free(req->pathname);
+        req->pathname = NULL;
+
+        send_r_error(req);
+        WARN("unable to duplicate Rust-validated pathname");
+
+        return 0;
+    }
+
+    free(req->pathname);
+    req->pathname = safe_pathname;
+}
 
     /* below we support cgis outside of a ScriptAlias */
     if (strcmp(CGI_MIME_TYPE, get_mime_type(buffer)) == 0) { /* cgi */
